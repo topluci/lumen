@@ -1,0 +1,97 @@
+plugins {
+    id 'base'
+}
+
+allprojects {
+    repositories {
+        mavenCentral()
+        maven { url 'https://maven.fabricmc.net' }
+    }
+}
+
+def cmakePath = System.getenv('CMAKE_PATH') ?: 'C:\\Program Files\\CMake\\bin\\cmake.exe'
+def mingwRoot = System.getenv('MINGW_ROOT') ?: "${System.getProperty('user.home')}\\AppData\\Local\\Microsoft\\WinGet\\Packages\\MartinStorsjo.LLVM-MinGW.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe\\llvm-mingw-20260602-ucrt-x86_64"
+def ninjaDir = System.getenv('NINJA_DIR') ?: "${System.getProperty('user.home')}\\AppData\\Local\\Microsoft\\WinGet\\Packages\\Ninja-build.Ninja_Microsoft.Winget.Source_8wekyb3d8bbwe"
+def vulkanSdk = System.getenv('VULKAN_SDK') ?: 'C:\\VulkanSDK\\1.4.350.0'
+
+task cmakeConfigure(type: Exec) {
+    workingDir file('native')
+    environment 'CC', "${mingwRoot}/bin/x86_64-w64-mingw32-clang"
+    environment 'CXX', "${mingwRoot}/bin/x86_64-w64-mingw32-clang++"
+    environment 'JAVA_HOME', "${System.getProperty('java.home')}"
+    environment 'PATH', "${mingwRoot}\\bin;${ninjaDir};C:\\Program Files\\CMake\\bin;${System.getenv('PATH')}"
+    commandLine cmakePath, '-S', '.', '-B', 'build', '-G', 'Ninja',
+        '-DCMAKE_BUILD_TYPE=Release',
+        "-DVulkan_INCLUDE_DIR=${vulkanSdk}/Include",
+        "-DVulkan_LIBRARY=${vulkanSdk}/Lib/vulkan-1.lib"
+}
+
+task cmakeBuild(type: Exec) {
+    dependsOn cmakeConfigure
+    workingDir file('native')
+    environment 'CC', "${mingwRoot}/bin/x86_64-w64-mingw32-clang"
+    environment 'CXX', "${mingwRoot}/bin/x86_64-w64-mingw32-clang++"
+    environment 'JAVA_HOME', "${System.getProperty('java.home')}"
+    environment 'PATH', "${mingwRoot}\\bin;${ninjaDir};C:\\Program Files\\CMake\\bin;${System.getenv('PATH')}"
+    commandLine cmakePath, '--build', 'build', '--config', 'Release'
+}
+
+task buildNative {
+    dependsOn cmakeBuild
+}
+
+subprojects {
+    afterEvaluate {
+        if (tasks.findByName('build')) {
+            build.dependsOn rootProject.tasks.buildNative
+        }
+        if (tasks.findByName('jar')) {
+            jar.dependsOn rootProject.tasks.buildNative
+            jar.from(file("${rootProject.projectDir}/native/build/lib")) {
+                include '*.dll'
+                into 'META-INF/natives'
+            }
+        }
+    }
+}
+
+tasks.register('combinedJar', Jar) {
+    dependsOn subprojects.collect { it.tasks.findByName('jar') }.findAll { it != null }
+    dependsOn tasks.buildNative
+
+    destinationDirectory = layout.buildDirectory.dir('libs')
+    archiveFileName = "lumen-0.1.0-26.1-26.1.2.jar"
+
+    // Collect classes from all version subprojects
+    subprojects.each { sp ->
+        def jarTask = sp.tasks.findByName('jar')
+        if (jarTask != null) {
+            from(jarTask.outputs.files.collect { zipTree(it) })
+        }
+    }
+
+    // Also include native DLL directly
+    from(file("${rootProject.projectDir}/native/build/lib")) {
+        include '*.dll'
+        into 'META-INF/natives'
+    }
+
+    // Use the 26.1 fabric.mod.json (broadest version range)
+    // Override the version-specific ones from subprojects
+    from("${rootProject.projectDir}/versions/26.1/src/main/resources/fabric.mod.json") {
+        filter { line ->
+            line.replace('${version}', '0.1.0')
+        }
+        into ''
+    }
+
+    manifest {
+        attributes([
+            "Implementation-Title": "lumen",
+            "Implementation-Version": "0.1.0",
+            "Lumen-Versions": subprojects.collect { it.name }.join(',')
+        ])
+    }
+
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}

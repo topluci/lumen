@@ -1,0 +1,12 @@
+pluginManagement {
+    repositories {
+        gradlePluginPortal()
+        maven { url 'https://maven.fabricmc.net' }
+        maven { url 'https://maven.architectury.dev/' }
+    }
+}
+
+rootProject.name = 'lumen'
+
+include 'versions:26.1'
+include 'versions:26.2'

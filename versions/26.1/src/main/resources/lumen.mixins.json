@@ -1,0 +1,10 @@
+{
+    "required": true,
+    "minVersion": "0.8",
+    "package": "com.luci.lumen.mixin",
+    "compatibilityLevel": "JAVA_25",
+    "plugin": "com.luci.lumen.mixin.LumenMixinPlugin",
+    "injectors": {
+        "defaultRequire": 1
+    }
+}

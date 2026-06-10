@@ -1,0 +1,65 @@
+plugins {
+	id 'net.fabricmc.fabric-loom' version '1.15.+'
+}
+
+version = project.mod_version
+group = project.maven_group
+
+base {
+	archivesName = project.archives_base_name
+}
+
+loom {
+	splitEnvironmentSourceSets()
+
+	mods {
+		"lumen" {
+			sourceSet sourceSets.main
+			sourceSet sourceSets.client
+		}
+	}
+
+	runs.configureEach {
+		vmArgs '--add-modules', 'jdk.incubator.vector'
+		property 'java.library.path', "${rootProject.projectDir}/native/build/lib"
+	}
+}
+
+repositories {
+	mavenCentral()
+}
+
+dependencies {
+	minecraft "com.mojang:minecraft:${project.minecraft_version}"
+	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+}
+
+java {
+	sourceCompatibility = JavaVersion.VERSION_25
+	targetCompatibility = JavaVersion.VERSION_25
+	withSourcesJar()
+}
+
+tasks.withType(JavaCompile).configureEach {
+	options.compilerArgs += ['--add-modules', 'jdk.incubator.vector']
+}
+
+jar {
+	from("LICENSE") {
+		rename { "${it}_${project.base.archivesName.get()}" }
+	}
+	manifest {
+		attributes([
+			"Implementation-Title": project.archives_base_name,
+			"Implementation-Version": project.version
+		])
+	}
+}
+
+processResources {
+	inputs.property "version", project.version
+	filesMatching("fabric.mod.json") {
+		expand "version": project.version
+	}
+}

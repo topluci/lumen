@@ -1,0 +1,15 @@
+{
+    "required": true,
+    "minVersion": "0.8",
+    "package": "com.luci.lumen.mixin.client",
+    "compatibilityLevel": "JAVA_25",
+    "plugin": "com.luci.lumen.mixin.LumenMixinPlugin",
+    "client": [
+        "GameRendererMixin",
+        "KeyboardInputMixin",
+        "SectionCompilerMixin"
+    ],
+    "injectors": {
+        "defaultRequire": 1
+    }
+}

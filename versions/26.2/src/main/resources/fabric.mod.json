@@ -1,0 +1,39 @@
+{
+    "schemaVersion": 1,
+    "id": "lumen",
+    "version": "${version}",
+    "name": "Lumen",
+    "description": "Hardware-accelerated ray tracing layer for Minecraft 26.x. Adds path traced global illumination, shadows, and reflections.",
+    "authors": ["luci"],
+    "contact": {
+        "homepage": "https://github.com/topluci/lumen",
+        "issues": "https://github.com/topluci/lumen/issues"
+    },
+    "license": "MIT",
+    "icon": "assets/lumen/icon.png",
+    "environment": "*",
+    "entrypoints": {
+        "main": ["com.luci.lumen.LumenInit"],
+        "client": ["com.luci.lumen.LumenClientInit"]
+    },
+    "mixins": [
+        "lumen.mixins.json",
+        "lumen.client.mixins.json"
+    ],
+    "depends": {
+        "fabricloader": ">=0.18.4",
+        "fabric-api": "*",
+        "minecraft": ">=26.2",
+        "java": ">=25"
+    },
+    "recommends": {
+        "potassium": "*",
+        "vulkanmod": "*",
+        "beryl": "*"
+    },
+    "breaks": {
+        "optifabric": "*",
+        "canvas": "*"
+    },
+    "custom": {}
+}

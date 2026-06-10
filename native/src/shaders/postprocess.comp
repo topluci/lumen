@@ -1,0 +1,163 @@
+#version 460
+#extension GL_EXT_samplerless_texture_functions : enable
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0, rgba32f) uniform image2D inputImage;
+layout(set = 0, binding = 1, rgba32f) uniform image2D outputImage;
+
+layout(push_constant) uniform Params {
+    float brightness;   // -1..1
+    float contrast;     // -1..1
+    float saturation;   // 0..2
+    float vibrance;     // -1..1
+    float temperature;  // -1..1
+    float tint;         // -1..1
+    float sharpness;    // 0..2
+    float filmGrain;    // 0..1
+    float vignette;     // 0..1
+    float exposure;     // -2..2
+    float shadows;      // -1..1
+    float highlights;   // -1..1
+    float whites;       // -1..1
+    float blacks;       // -1..1
+    float clarity;      // -1..1
+    float dehaze;        // 0..1
+    int tonemapCurve;   // 0=ACES 1=Filmic 2=Reinhard 3=Uncharted2
+    uint frameCount;
+    float _pad0;
+    float _pad1;
+};
+
+// ---- helpers ----
+
+float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+
+vec3 acesFilm(vec3 x) {
+    float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
+    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}
+
+vec3 filmic(vec3 x) {
+    vec3 y = max(vec3(0.0), x - 0.004);
+    return (y * (6.2 * y + 0.5)) / (y * (6.2 * y + 1.7) + 0.06);
+}
+
+vec3 reinhard(vec3 x) { return x / (x + vec3(1.0)); }
+
+vec3 uncharted2(vec3 x) {
+    float A = 0.15, B = 0.50, C = 0.10, D = 0.20, E = 0.02, F = 0.30;
+    return ((x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F)) - E / F;
+}
+
+vec3 tonemap(vec3 c) {
+    if (tonemapCurve == 1) return filmic(c);
+    if (tonemapCurve == 2) return reinhard(c);
+    if (tonemapCurve == 3) return uncharted2(c);
+    return acesFilm(c); // default ACES
+}
+
+// ---- main ----
+
+void main() {
+    ivec2 size = imageSize(inputImage);
+    ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
+    if (pos.x >= size.x || pos.y >= size.y) return;
+
+    vec2 uv = vec2(pos) / vec2(size);
+    vec3 col = imageLoad(inputImage, pos).rgb;
+
+    // Exposure
+    col *= exp2(exposure);
+
+    // Brightness
+    col += brightness;
+
+    // Contrast (mid-gray pivot)
+    col = (col - 0.5) * (1.0 + contrast) + 0.5;
+
+    // Shadows / Highlights
+    float l = luma(col);
+    float shadowsW = 1.0 - smoothstep(0.0, 0.4, l);
+    float highlightsW = smoothstep(0.6, 1.0, l);
+    col += shadows * shadowsW * vec3(0.3);
+    col += highlights * highlightsW * vec3(-0.15);
+
+    // Whites / Blacks
+    col += whites * 0.2;
+    col -= blacks * 0.2;
+
+    // Saturation + Vibrance
+    float l2 = luma(col);
+    vec3 diff = col - l2;
+    float vibranceW = 1.0 - max(max(diff.r, diff.g), diff.b);
+    col = l2 + diff * saturation;
+    col = l2 + (col - l2) * (1.0 + vibrance * vibranceW * 0.3);
+
+    // Temperature (blue← →orange)
+    col.r *= 1.0 + temperature * 0.15;
+    col.b *= 1.0 - temperature * 0.15;
+
+    // Tint (green← →magenta)
+    col.g *= 1.0 - tint * 0.1;
+    col.rb += tint * 0.05;
+
+    // Clarity (local contrast via laplacian-like difference)
+    if (abs(clarity) > 0.001) {
+        vec3 sum = vec3(0.0);
+        int r = 2;
+        float count = 0.0;
+        for (int dy = -r; dy <= r; dy++) {
+            for (int dx = -r; dx <= r; dx++) {
+                ivec2 p = pos + ivec2(dx, dy);
+                if (p.x >= 0 && p.x < size.x && p.y >= 0 && p.y < size.y) {
+                    sum += imageLoad(inputImage, p).rgb;
+                    count += 1.0;
+                }
+            }
+        }
+        vec3 blur = sum / count;
+        col = mix(col, col + (col - blur) * 0.5, clarity);
+    }
+
+    // Dehaze
+    if (dehaze > 0.001) {
+        float haze = max(0.0, luma(col) - 0.3);
+        col = mix(col, col * 1.2 - 0.1, dehaze * haze);
+    }
+
+    // Tonemap
+    col = tonemap(col);
+
+    // Film Grain
+    if (filmGrain > 0.001) {
+        uint seed = uint(pos.x) * 1973 + uint(pos.y) * 9277 + uint(frameCount) * 26699;
+        seed = seed * 1664525u + 1013904223u;
+        float g = float(seed & 0xFFFF) / 65535.0;
+        col += (g - 0.5) * filmGrain * 0.1;
+    }
+
+    // Vignette
+    vec2 center = uv - 0.5;
+    float d = length(center);
+    float vig = 1.0 - vignette * d * d * 1.5;
+    col *= vig;
+
+    // Sharpness (unsharp mask)
+    if (sharpness > 0.001) {
+        // simple 3x3 laplacian
+        vec3 lap = vec3(0.0);
+        ivec2 off;
+        off = pos + ivec2(-1, 0); lap += imageLoad(inputImage, off).rgb * -1.0;
+        off = pos + ivec2( 1, 0); lap += imageLoad(inputImage, off).rgb * -1.0;
+        off = pos + ivec2( 0,-1); lap += imageLoad(inputImage, off).rgb * -1.0;
+        off = pos + ivec2( 0, 1); lap += imageLoad(inputImage, off).rgb * -1.0;
+        off = pos;                lap += imageLoad(inputImage, off).rgb *  4.0;
+        col += lap * sharpness * 0.3;
+    }
+
+    // Clamp
+    col = clamp(col, 0.0, 1.0);
+
+    imageStore(outputImage, pos, vec4(col, 1.0));
+}

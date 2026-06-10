@@ -1,0 +1,10 @@
+# ninja log v7
+21	212	8026221889205288	CMakeFiles/lumen_native_rt.dir/src/lumen_device.cpp.obj	9244cb516dbad523
+87	7337	8027094983407461	CMakeFiles/lumen_native_rt.dir/src/lumen_jni_bridge.cpp.obj	b21f719a640fa036
+60	545	8027135533634775	CMakeFiles/lumen_native_rt.dir/src/lumen_as.cpp.obj	7087f4361ca468cd
+64	1426	8027135211286971	CMakeFiles/lumen_native_rt.dir/src/lumen_rt_pipeline.cpp.obj	f05a3c29b69e6ca9
+35	195	8026222003506227	CMakeFiles/lumen_native_rt.dir/src/lumen_output_image.cpp.obj	8656d79388339bfc
+28	105	8026223012301742	CMakeFiles/lumen_native_rt.dir/src/lumen_scene.cpp.obj	bfb2ff88d7bea0ab
+547	945	8027135538506683	lib/liblumen_native_rt.dll	8f2f9b43713e6014
+547	945	8027135538506683	liblumen_native_rt.dll.a	8f2f9b43713e6014
+38	267	8026229759627975	CMakeFiles/lumen_native_rt.dir/src/lumen_postprocess.cpp.obj	2dd2788a131a6931

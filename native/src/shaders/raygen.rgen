@@ -1,0 +1,139 @@
+#version 460
+#extension GL_EXT_ray_tracing : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+layout(location = 0) rayPayloadEXT vec4 payload;
+
+layout(set = 0, binding = 0, rgba8) uniform image2D outputImage;
+layout(set = 0, binding = 1) uniform accelerationStructureEXT topLevelAS;
+layout(set = 0, binding = 2) uniform RTParams {
+    uint frameCount;
+    uint samplePerPixel;
+    float randomSeed;
+    float lightIntensity;
+    vec4 cameraPos;
+    vec4 cameraDir;
+} params;
+
+// PCG hash for random numbers
+uint hash(uint s) {
+    s ^= 2747636419u;
+    s *= 2654435761u;
+    s ^= s >> 16;
+    s *= 2654435761u;
+    s ^= s >> 16;
+    s *= 2654435761u;
+    return s;
+}
+
+float pcg(uint v) {
+    return float(v) / 4294967296.0;
+}
+
+vec2 halton(uint idx, uint base1, uint base2) {
+    vec2 r;
+    float f = 1.0;
+    uint i = idx;
+    do {
+        f /= float(base1);
+        r.x += f * float(i % base1);
+        i /= base1;
+    } while (i > 0);
+    i = idx;
+    f = 1.0;
+    do {
+        f /= float(base2);
+        r.y += f * float(i % base2);
+        i /= base2;
+    } while (i > 0);
+    return r;
+}
+
+// Cosine-weighted hemisphere sampling
+vec3 cosineHemisphere(vec2 r) {
+    float theta = 2.0 * 3.14159265 * r.x;
+    float r2 = sqrt(r.y);
+    return vec3(cos(theta) * r2, sin(theta) * r2, sqrt(1.0 - r.y));
+}
+
+struct HitInfo {
+    vec3 pos;
+    vec3 normal;
+    vec3 color;
+    float emissive;
+};
+
+HitInfo trace(vec3 origin, vec3 dir, uint seed) {
+    payload = vec4(0.0);
+    traceRayEXT(topLevelAS, gl_RayFlagsTerminateOnFirstHitEXT, 0xFF, 0, 0, 0,
+                origin, 0.001, dir, 10000.0, 0);
+    return HitInfo(payload.xyz, vec3(0.0), vec3(0.0), payload.w);
+}
+
+void main() {
+    ivec2 dims = imageSize(outputImage);
+    ivec2 idx = ivec2(gl_LaunchIDEXT.xy);
+    vec2 jitter = halton(params.frameCount, 2, 3) - 0.5;
+
+    // Camera setup from params
+    vec3 origin = params.cameraPos.xyz;
+    vec3 forward = normalize(params.cameraDir.xyz);
+    vec3 worldUp = abs(forward.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    vec3 right = normalize(cross(forward, worldUp));
+    vec3 up = cross(right, forward);
+
+    vec3 accumulated = vec3(0.0);
+    for (int s = 0; s < int(params.samplePerPixel); s++) {
+        float sx = (float(idx.x) + jitter.x + 0.5) / float(dims.x);
+        float sy = (float(idx.y) + jitter.y + 0.5) / float(dims.y);
+        sx = sx * 2.0 - 1.0;
+        sy = sy * 2.0 - 1.0;
+        float aspect = float(dims.x) / float(dims.y);
+        sx *= aspect;
+
+        vec3 dir = normalize(sx * right + sy * up + forward);
+
+        vec3 throughput = vec3(1.0);
+        vec3 radiance = vec3(0.0);
+
+        for (int bounce = 0; bounce < 6; bounce++) {
+            payload = vec4(0.0);
+            traceRayEXT(topLevelAS, 0, 0xFF, 0, 0, 0,
+                        origin, 0.001, dir, 10000.0, 0);
+
+            vec3 hitPos = payload.xyz;
+            vec3 hitColor = payload.xyz;
+            float emissive = payload.w;
+
+            if (payload.w > 0.0) {
+                radiance += throughput * hitColor * params.lightIntensity;
+                break;
+            }
+            if (length(hitColor) < 0.001) {
+                break;
+            }
+
+            uint h = hash(uint(idx.x + idx.y * dims.x + bounce * 7327 + s * 137));
+            vec2 r2 = vec2(pcg(hash(h + 1)), pcg(hash(h + 2)));
+            vec3 newDir = cosineHemisphere(r2);
+            vec3 up = abs(dir.y) < 0.999 ? vec3(0, 1, 0) : vec3(1, 0, 0);
+            vec3 tangent = normalize(cross(up, dir));
+            vec3 bitangent = cross(dir, tangent);
+            dir = normalize(tangent * newDir.x + bitangent * newDir.y + dir * newDir.z);
+
+            throughput *= hitColor;
+            origin = hitPos + dir * 0.001;
+
+            // Russian roulette
+            float q = max(throughput.r, max(throughput.g, throughput.b));
+            if (q < 0.01) {
+                if (pcg(hash(h + 3)) > q) break;
+                throughput /= q;
+            }
+        }
+        accumulated += radiance;
+    }
+
+    vec3 final = accumulated / float(params.samplePerPixel);
+    imageStore(outputImage, idx, vec4(final, 1.0));
+}
