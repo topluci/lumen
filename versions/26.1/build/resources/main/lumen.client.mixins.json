@@ -6,8 +6,12 @@
     "plugin": "com.luci.lumen.mixin.LumenMixinPlugin",
     "client": [
         "GameRendererMixin",
+        "InGameHudMixin",
         "KeyboardInputMixin",
-        "SectionCompilerMixin"
+        "SectionCompilerMixin",
+        "OptionsSubScreenAccessor",
+        "VideoSettingsScreenMixin",
+        "WindowResizeMixin"
     ],
     "injectors": {
         "defaultRequire": 1

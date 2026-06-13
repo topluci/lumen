@@ -9,6 +9,22 @@ extern "C" {
 #endif
 /*
  * Class:     com_luci_lumen_vk_LumenNativeBridge
+ * Method:    nativeVerifyHandles
+ * Signature: (JJ)Z
+ */
+JNIEXPORT jboolean JNICALL Java_com_luci_lumen_vk_LumenNativeBridge_nativeVerifyHandles
+  (JNIEnv *, jclass, jlong, jlong);
+
+/*
+ * Class:     com_luci_lumen_vk_LumenNativeBridge
+ * Method:    nativeGetInitStep
+ * Signature: ()I
+ */
+JNIEXPORT jint JNICALL Java_com_luci_lumen_vk_LumenNativeBridge_nativeGetInitStep
+  (JNIEnv *, jclass);
+
+/*
+ * Class:     com_luci_lumen_vk_LumenNativeBridge
  * Method:    init
  * Signature: (JJ)Z
  */
@@ -25,11 +41,27 @@ JNIEXPORT jboolean JNICALL Java_com_luci_lumen_vk_LumenNativeBridge_renderFrame
 
 /*
  * Class:     com_luci_lumen_vk_LumenNativeBridge
+ * Method:    nativeReadbackPixels
+ * Signature: ()[I
+ */
+JNIEXPORT jintArray JNICALL Java_com_luci_lumen_vk_LumenNativeBridge_nativeReadbackPixels
+  (JNIEnv *, jclass);
+
+/*
+ * Class:     com_luci_lumen_vk_LumenNativeBridge
  * Method:    shutdown
  * Signature: ()Z
  */
 JNIEXPORT jboolean JNICALL Java_com_luci_lumen_vk_LumenNativeBridge_shutdown
   (JNIEnv *, jclass);
+
+/*
+ * Class:     com_luci_lumen_vk_LumenNativeBridge
+ * Method:    nativeResize
+ * Signature: (II)Z
+ */
+JNIEXPORT jboolean JNICALL Java_com_luci_lumen_vk_LumenNativeBridge_nativeResize
+  (JNIEnv *, jclass, jint, jint);
 
 /*
  * Class:     com_luci_lumen_vk_LumenNativeBridge
@@ -109,6 +141,30 @@ JNIEXPORT jboolean JNICALL Java_com_luci_lumen_vk_LumenNativeBridge_nativeInitHd
  * Signature: ()V
  */
 JNIEXPORT void JNICALL Java_com_luci_lumen_vk_LumenNativeBridge_nativeShutdownHdr
+  (JNIEnv *, jclass);
+
+/*
+ * Class:     com_luci_lumen_vk_LumenNativeBridge
+ * Method:    nativeInitDenoiser
+ * Signature: (IIZ)Z
+ */
+JNIEXPORT jboolean JNICALL Java_com_luci_lumen_vk_LumenNativeBridge_nativeInitDenoiser
+  (JNIEnv *, jclass, jint, jint, jboolean);
+
+/*
+ * Class:     com_luci_lumen_vk_LumenNativeBridge
+ * Method:    nativeDenoiseImage
+ * Signature: ([III)Z
+ */
+JNIEXPORT jboolean JNICALL Java_com_luci_lumen_vk_LumenNativeBridge_nativeDenoiseImage
+  (JNIEnv *, jclass, jintArray, jint, jint);
+
+/*
+ * Class:     com_luci_lumen_vk_LumenNativeBridge
+ * Method:    nativeShutdownDenoiser
+ * Signature: ()V
+ */
+JNIEXPORT void JNICALL Java_com_luci_lumen_vk_LumenNativeBridge_nativeShutdownDenoiser
   (JNIEnv *, jclass);
 
 #ifdef __cplusplus

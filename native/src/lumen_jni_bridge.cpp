@@ -9,8 +9,12 @@
 #include "lumen_scene.h"
 #include "lumen_output_image.h"
 #include "lumen_postprocess.h"
+#include "oidn_denoiser.h"
 #include <cstdio>
 #include <cstring>
+#include <string>
+#include <vector>
+#include <fstream>
 
 static LumenDevice g_dev{};
 static LumenASBuilder g_asBuilder{};
@@ -25,6 +29,48 @@ static VkBuffer g_paramsBuffer = VK_NULL_HANDLE;
 static VkDeviceMemory g_paramsMemory = VK_NULL_HANDLE;
 static LumenPostProcess g_postProcess{};
 static bool g_initialized = false;
+
+// Init step tracking for diagnostics
+enum InitStep {
+    INIT_STEP_NONE = 0,
+    INIT_STEP_HANDLE_VERIFY,
+    INIT_STEP_QUERY_DEVICE,
+    INIT_STEP_RT_SUPPORT,
+    INIT_STEP_COMMAND_POOL,
+    INIT_STEP_AS_BUILDER,
+    INIT_STEP_BLAS,
+    INIT_STEP_TLAS,
+    INIT_STEP_OUTPUT_IMAGE,
+    INIT_STEP_MATERIAL_BUFFER,
+    INIT_STEP_PARAMS_BUFFER,
+    INIT_STEP_RT_PIPELINE,
+    INIT_STEP_DESCRIPTORS,
+    INIT_STEP_COMPLETE
+};
+static int g_initStep = INIT_STEP_NONE;
+static const char* initStepName(int step) {
+    switch (step) {
+        case INIT_STEP_NONE: return "Not started";
+        case INIT_STEP_HANDLE_VERIFY: return "Handle verification";
+        case INIT_STEP_QUERY_DEVICE: return "Device query";
+        case INIT_STEP_RT_SUPPORT: return "RT support check";
+        case INIT_STEP_COMMAND_POOL: return "Command pool";
+        case INIT_STEP_AS_BUILDER: return "AS builder init";
+        case INIT_STEP_BLAS: return "BLAS build";
+        case INIT_STEP_TLAS: return "TLAS build";
+        case INIT_STEP_OUTPUT_IMAGE: return "Output image";
+        case INIT_STEP_MATERIAL_BUFFER: return "Material buffer";
+        case INIT_STEP_PARAMS_BUFFER: return "Params buffer";
+        case INIT_STEP_RT_PIPELINE: return "RT pipeline";
+        case INIT_STEP_DESCRIPTORS: return "Descriptors";
+        case INIT_STEP_COMPLETE: return "Complete";
+        default: return "Unknown";
+    }
+}
+
+// Staging buffer for GPU→CPU readback
+static VkBuffer g_stagingBuffer = VK_NULL_HANDLE;
+static VkDeviceMemory g_stagingMemory = VK_NULL_HANDLE;
 
 struct RTParams {
     uint32_t frameCount;
@@ -102,29 +148,38 @@ Java_com_luci_lumen_vk_LumenNativeBridge_init(
 
     if (!instance || !device) {
         printf("[Lumen native] ERROR: null Vulkan handles\n");
+        g_initStep = INIT_STEP_HANDLE_VERIFY;
         return JNI_FALSE;
     }
+    g_initStep = INIT_STEP_HANDLE_VERIFY;
 
     if (!lumen_query_device(instance, device, &g_dev)) {
         printf("[Lumen native] ERROR: failed to query device\n");
+        g_initStep = INIT_STEP_QUERY_DEVICE;
         return JNI_FALSE;
     }
+    g_initStep = INIT_STEP_QUERY_DEVICE;
 
     if (!g_dev.supportsRayTracingPipeline) {
         printf("[Lumen native] ERROR: ray tracing pipeline not supported\n");
+        g_initStep = INIT_STEP_RT_SUPPORT;
         return JNI_FALSE;
     }
+    g_initStep = INIT_STEP_RT_SUPPORT;
 
     VkCommandPoolCreateInfo poolInfo = {VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
     poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     poolInfo.queueFamilyIndex = g_dev.graphicsQueueFamily;
     if (vkCreateCommandPool(device, &poolInfo, nullptr, &g_cmdPool) != VK_SUCCESS) {
         printf("[Lumen native] ERROR: failed to create command pool\n");
+        g_initStep = INIT_STEP_COMMAND_POOL;
         return JNI_FALSE;
     }
+    g_initStep = INIT_STEP_COMMAND_POOL;
 
     // Initialize AS builder
     g_asBuilder.init(device, g_dev.physicalDevice, g_dev.graphicsQueueFamily, g_dev.graphicsQueue);
+    g_initStep = INIT_STEP_AS_BUILDER;
 
     // Build BLAS from Cornell box scene
     g_blas = g_asBuilder.buildBottomLevel(
@@ -132,23 +187,29 @@ Java_com_luci_lumen_vk_LumenNativeBridge_init(
         reinterpret_cast<const uint32_t*>(SceneData::indices), SceneData::indexCount);
     if (!g_blas || !g_blas->handle) {
         printf("[Lumen native] ERROR: failed to build BLAS\n");
+        g_initStep = INIT_STEP_BLAS;
         return JNI_FALSE;
     }
+    g_initStep = INIT_STEP_BLAS;
 
     // Build TLAS
     g_tlas = g_asBuilder.buildTopLevel(g_blas, 1);
     if (!g_tlas || !g_tlas->handle) {
         printf("[Lumen native] ERROR: failed to build TLAS\n");
+        g_initStep = INIT_STEP_TLAS;
         return JNI_FALSE;
     }
+    g_initStep = INIT_STEP_TLAS;
 
     printf("[Lumen native] Cornell box accel structs built (%u tris)\n", SceneData::triCount);
 
     // Create output storage image
     if (!g_outputImage.init(device, g_dev.physicalDevice, 800, 600)) {
         printf("[Lumen native] ERROR: failed to create output image\n");
+        g_initStep = INIT_STEP_OUTPUT_IMAGE;
         return JNI_FALSE;
     }
+    g_initStep = INIT_STEP_OUTPUT_IMAGE;
 
     // Create material buffer (binding=3 in shader)
     VkDeviceSize matBufSize = SceneData::triCount * sizeof(SceneMat);
@@ -156,6 +217,7 @@ Java_com_luci_lumen_vk_LumenNativeBridge_init(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
         SceneData::materials, &g_materialMemory, g_dev.physicalDevice);
     printf("[Lumen native] Material buffer created (%llu bytes)\n", (unsigned long long)matBufSize);
+    g_initStep = INIT_STEP_MATERIAL_BUFFER;
 
     // Create params uniform buffer (binding=2 in shader)
     uint32_t samples = (g_perf.qualityLevel == 2) ? 4 : (g_perf.qualityLevel == 1) ? 1 : 1;
@@ -173,12 +235,15 @@ Java_com_luci_lumen_vk_LumenNativeBridge_init(
     g_paramsBuffer = createUploadBuffer(device, sizeof(RTParams),
         VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
         &params, &g_paramsMemory, g_dev.physicalDevice);
+    g_initStep = INIT_STEP_PARAMS_BUFFER;
 
     // Initialize RT pipeline
     if (!g_rtPipeline.init(device, g_dev.physicalDevice, g_tlas, &g_outputImage)) {
         printf("[Lumen native] ERROR: failed to create RT pipeline\n");
+        g_initStep = INIT_STEP_RT_PIPELINE;
         return JNI_FALSE;
     }
+    g_initStep = INIT_STEP_RT_PIPELINE;
 
     // Update descriptor set with material buffer and params buffer
     VkDescriptorBufferInfo matBufInfo = {};
@@ -204,7 +269,9 @@ Java_com_luci_lumen_vk_LumenNativeBridge_init(
     writeParams.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     writeParams.pBufferInfo = &paramBufInfo;
     vkUpdateDescriptorSets(device, 1, &writeParams, 0, nullptr);
+    g_initStep = INIT_STEP_DESCRIPTORS;
 
+    g_initStep = INIT_STEP_COMPLETE;
     printf("[Lumen native] init() complete - Cornell box path tracer ready\n");
     g_initialized = true;
     return JNI_TRUE;
@@ -223,6 +290,26 @@ Java_com_luci_lumen_vk_LumenNativeBridge_renderFrame(
     }
 
     VkDevice device = g_dev.device;
+
+    // --- Blit output image to staging buffer for readback ---
+    if (!g_stagingBuffer) {
+        VkDeviceSize bufSize = g_outputImage.width * g_outputImage.height * 4;
+        VkBufferCreateInfo bufInfo = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+        bufInfo.size = bufSize;
+        bufInfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        bufInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        vkCreateBuffer(device, &bufInfo, nullptr, &g_stagingBuffer);
+
+        VkMemoryRequirements memReqs;
+        vkGetBufferMemoryRequirements(device, g_stagingBuffer, &memReqs);
+        VkMemoryAllocateInfo allocInfo = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        allocInfo.allocationSize = memReqs.size;
+        allocInfo.memoryTypeIndex = findMemoryType(g_dev.physicalDevice,
+            memReqs.memoryTypeBits,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        vkAllocateMemory(device, &allocInfo, nullptr, &g_stagingMemory);
+        vkBindBufferMemory(device, g_stagingBuffer, g_stagingMemory, 0);
+    }
     auto vkCmdTraceRays = (PFN_vkCmdTraceRaysKHR)
         vkGetDeviceProcAddr(device, "vkCmdTraceRaysKHR");
     if (!vkCmdTraceRays) return JNI_FALSE;
@@ -290,6 +377,64 @@ Java_com_luci_lumen_vk_LumenNativeBridge_renderFrame(
     vkDestroyFence(device, fence, nullptr);
     vkFreeCommandBuffers(device, g_cmdPool, 1, &cmdBuf);
 
+    // --- Copy output image to staging buffer for Java readback ---
+    VkCommandBufferAllocateInfo copyAlloc = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    copyAlloc.commandPool = g_cmdPool;
+    copyAlloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    copyAlloc.commandBufferCount = 1;
+    VkCommandBuffer copyCmd;
+    vkAllocateCommandBuffers(device, &copyAlloc, &copyCmd);
+
+    VkCommandBufferBeginInfo copyBegin = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    copyBegin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(copyCmd, &copyBegin);
+
+    // Transition output image from GENERAL to TRANSFER_SRC
+    VkImageMemoryBarrier barrier = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = g_outputImage.image;
+    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.layerCount = 1;
+    barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(copyCmd,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+    VkBufferImageCopy region = {};
+    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    region.imageSubresource.layerCount = 1;
+    region.imageExtent = {g_outputImage.width, g_outputImage.height, 1};
+    vkCmdCopyImageToBuffer(copyCmd, g_outputImage.image,
+        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, g_stagingBuffer, 1, &region);
+
+    // Transition back to GENERAL
+    barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(copyCmd,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+    vkEndCommandBuffer(copyCmd);
+
+    VkSubmitInfo copySubmit = {VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    copySubmit.commandBufferCount = 1;
+    copySubmit.pCommandBuffers = &copyCmd;
+    VkFence copyFence;
+    VkFenceCreateInfo copyFenceInfo = {VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+    vkCreateFence(device, &copyFenceInfo, nullptr, &copyFence);
+    vkQueueSubmit(g_dev.graphicsQueue, 1, &copySubmit, copyFence);
+    vkWaitForFences(device, 1, &copyFence, VK_TRUE, UINT64_MAX);
+    vkDestroyFence(device, copyFence, nullptr);
+    vkFreeCommandBuffers(device, g_cmdPool, 1, &copyCmd);
+    g_outputImage.frameCount++;
+
     // Adaptive performance: measure frame time and adjust skip
     if (g_perf.adaptiveEnabled) {
         LARGE_INTEGER tsc, freq;
@@ -313,6 +458,29 @@ Java_com_luci_lumen_vk_LumenNativeBridge_renderFrame(
     }
 
     return JNI_TRUE;
+}
+
+JNIEXPORT jintArray JNICALL
+Java_com_luci_lumen_vk_LumenNativeBridge_nativeReadbackPixels(
+    JNIEnv* env, jclass cls)
+{
+    if (!g_initialized) return nullptr;
+
+    VkDevice device = g_dev.device;
+    uint32_t w = g_outputImage.width;
+    uint32_t h = g_outputImage.height;
+    uint32_t pixelCount = w * h;
+
+    void* mapped;
+    vkMapMemory(device, g_stagingMemory, 0, pixelCount * 4, 0, &mapped);
+
+    jintArray result = env->NewIntArray((jsize)pixelCount);
+    if (result) {
+        env->SetIntArrayRegion(result, 0, (jsize)pixelCount, (const jint*)mapped);
+    }
+
+    vkUnmapMemory(device, g_stagingMemory);
+    return result;
 }
 
 JNIEXPORT jboolean JNICALL
@@ -451,9 +619,92 @@ Java_com_luci_lumen_vk_LumenNativeBridge_shutdown(
     if (g_paramsMemory) vkFreeMemory(g_dev.device, g_paramsMemory, nullptr);
     if (g_cmdPool) vkDestroyCommandPool(g_dev.device, g_cmdPool, nullptr);
 
+    // Clean up staging buffer
+    if (g_stagingBuffer) vkDestroyBuffer(g_dev.device, g_stagingBuffer, nullptr);
+    if (g_stagingMemory) vkFreeMemory(g_dev.device, g_stagingMemory, nullptr);
+    g_stagingBuffer = VK_NULL_HANDLE;
+    g_stagingMemory = VK_NULL_HANDLE;
+
     g_initialized = false;
+    g_initStep = INIT_STEP_NONE;
     g_dev = {};
     printf("[Lumen native] shutdown() complete\n");
+    return JNI_TRUE;
+}
+
+// ---- Diagnostics JNI ----
+
+JNIEXPORT jboolean JNICALL
+Java_com_luci_lumen_vk_LumenNativeBridge_nativeVerifyHandles(
+    JNIEnv* env, jclass cls, jlong instanceHandle, jlong deviceHandle)
+{
+    VkInstance instance = reinterpret_cast<VkInstance>(static_cast<uintptr_t>(instanceHandle));
+    VkDevice device = reinterpret_cast<VkDevice>(static_cast<uintptr_t>(deviceHandle));
+
+    if (!instance || !device) {
+        printf("[Lumen native] verifyHandles: null handles\n");
+        return JNI_FALSE;
+    }
+
+    // Try to get a queue from the device — if this works, handles are valid
+    VkQueue queue = VK_NULL_HANDLE;
+    vkGetDeviceQueue(device, 0, 0, &queue);
+    if (!queue) {
+        printf("[Lumen native] verifyHandles: vkGetDeviceQueue returned null\n");
+        return JNI_FALSE;
+    }
+
+    // Verify physical device enumeration works
+    uint32_t count = 0;
+    vkEnumeratePhysicalDevices(instance, &count, nullptr);
+    if (count == 0) {
+        printf("[Lumen native] verifyHandles: no physical devices found\n");
+        return JNI_FALSE;
+    }
+
+    printf("[Lumen native] verifyHandles: OK (%u physical device(s), queue=%p)\n", count, (void*)queue);
+    return JNI_TRUE;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_luci_lumen_vk_LumenNativeBridge_nativeGetInitStep(
+    JNIEnv* env, jclass cls)
+{
+    return (jint)g_initStep;
+}
+
+// ---- Resize JNI ----
+
+JNIEXPORT jboolean JNICALL
+Java_com_luci_lumen_vk_LumenNativeBridge_nativeResize(
+    JNIEnv* env, jclass cls, jint width, jint height)
+{
+    if (!g_initialized) {
+        printf("[Lumen native] resize: not initialized\n");
+        return JNI_FALSE;
+    }
+
+    if (width <= 0 || height <= 0) {
+        printf("[Lumen native] resize: invalid dimensions %dx%d\n", (int)width, (int)height);
+        return JNI_FALSE;
+    }
+
+    VkDevice device = g_dev.device;
+
+    // Destroy old staging buffer
+    if (g_stagingBuffer) vkDestroyBuffer(device, g_stagingBuffer, nullptr);
+    if (g_stagingMemory) vkFreeMemory(device, g_stagingMemory, nullptr);
+    g_stagingBuffer = VK_NULL_HANDLE;
+    g_stagingMemory = VK_NULL_HANDLE;
+
+    // Resize output image
+    bool ok = g_outputImage.resize(device, g_dev.physicalDevice, (uint32_t)width, (uint32_t)height);
+    if (!ok) {
+        printf("[Lumen native] resize: output image resize failed\n");
+        return JNI_FALSE;
+    }
+
+    printf("[Lumen native] resize: output image resized to %dx%d\n", (int)width, (int)height);
     return JNI_TRUE;
 }
 
@@ -550,15 +801,142 @@ Java_com_luci_lumen_vk_LumenNativeBridge_nativeShutdownPostProcess(
     g_postProcess.destroy();
 }
 
-// ---- Shader Pack JNI (stub) ----
+static bool readSpvFile(const std::string& path, std::vector<uint32_t>& code) {
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file.is_open()) {
+        printf("[Lumen native] readSpvFile: cannot open %s\n", path.c_str());
+        return false;
+    }
+    size_t fileSize = (size_t)file.tellg();
+    if (fileSize < 4 || fileSize % 4 != 0) {
+        printf("[Lumen native] readSpvFile: invalid SPV file size %zu\n", fileSize);
+        return false;
+    }
+    file.seekg(0, std::ios::beg);
+    code.resize(fileSize / 4);
+    file.read(reinterpret_cast<char*>(code.data()), (std::streamsize)fileSize);
+    file.close();
+    // Verify SPIR-V magic number
+    if (code[0] != 0x07230203) {
+        printf("[Lumen native] readSpvFile: invalid SPIR-V magic in %s\n", path.c_str());
+        return false;
+    }
+    return true;
+}
+
+// ---- Shader Pack JNI ----
 JNIEXPORT jboolean JNICALL
 Java_com_luci_lumen_vk_LumenNativeBridge_nativeLoadShaderPack(
     JNIEnv* env, jclass cls, jstring shaderPackPath)
 {
+    if (!g_initialized) {
+        printf("[Lumen native] nativeLoadShaderPack: not initialized\n");
+        return JNI_FALSE;
+    }
+
     const char* path = env->GetStringUTFChars(shaderPackPath, nullptr);
-    printf("[Lumen native] nativeLoadShaderPack(\"%s\") - NOT YET IMPLEMENTED\n", path);
+    printf("[Lumen native] nativeLoadShaderPack(\"%s\")\n", path);
+
+    std::string base(path);
+    std::string raygenPath = base + "/.lumen/shaders/raygen.spv";
+    std::string closesthitPath = base + "/.lumen/shaders/closesthit.spv";
+    std::string missPath = base + "/.lumen/shaders/miss.spv";
+
+    std::vector<uint32_t> raygen, closesthit, miss;
+    if (!readSpvFile(raygenPath, raygen) ||
+        !readSpvFile(closesthitPath, closesthit) ||
+        !readSpvFile(missPath, miss)) {
+        printf("[Lumen native] nativeLoadShaderPack: failed to read SPV files from %s/.lumen/shaders/\n", path);
+        // Also try legacy flat layout
+        raygenPath = base + "/raygen.spv";
+        closesthitPath = base + "/closesthit.spv";
+        missPath = base + "/miss.spv";
+        if (!readSpvFile(raygenPath, raygen) ||
+            !readSpvFile(closesthitPath, closesthit) ||
+            !readSpvFile(missPath, miss)) {
+            printf("[Lumen native] nativeLoadShaderPack: failed to read SPV files from %s (flat)\n", path);
+            env->ReleaseStringUTFChars(shaderPackPath, path);
+            return JNI_FALSE;
+        }
+    }
+
+    // Reset frame counter for progressive rendering
+    {
+        VkDevice device = g_dev.device;
+        void* mapped;
+        vkMapMemory(device, g_paramsMemory, 0, sizeof(RTParams), 0, &mapped);
+        RTParams params;
+        memcpy(&params, mapped, sizeof(RTParams));
+        params.frameCount = 0;
+        memcpy(mapped, &params, sizeof(RTParams));
+        vkUnmapMemory(device, g_paramsMemory);
+    }
+
+    bool ok = g_rtPipeline.reloadShaders(g_dev.device, g_dev.physicalDevice,
+                                          &g_outputImage,
+                                          raygen.data(), (uint32_t)raygen.size(),
+                                          closesthit.data(), (uint32_t)closesthit.size(),
+                                          miss.data(), (uint32_t)miss.size());
+    if (!ok) {
+        printf("[Lumen native] nativeLoadShaderPack: pipeline reload failed\n");
+        env->ReleaseStringUTFChars(shaderPackPath, path);
+        return JNI_FALSE;
+    }
+
+    // Re-write TLAS descriptor (binding 1)
+    {
+        VkWriteDescriptorSetAccelerationStructureKHR writeAS = {
+            VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR};
+        writeAS.accelerationStructureCount = 1;
+        writeAS.pAccelerationStructures = &g_tlas->handle;
+
+        VkWriteDescriptorSet writeTLAS = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        writeTLAS.pNext = &writeAS;
+        writeTLAS.dstSet = g_rtPipeline.descSet;
+        writeTLAS.dstBinding = 1;
+        writeTLAS.descriptorCount = 1;
+        writeTLAS.descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+        vkUpdateDescriptorSets(g_dev.device, 1, &writeTLAS, 0, nullptr);
+    }
+
+    // Re-write params descriptor (binding 2)
+    {
+        VkDescriptorBufferInfo paramBufInfo = {};
+        paramBufInfo.buffer = g_paramsBuffer;
+        paramBufInfo.range = sizeof(RTParams);
+
+        VkWriteDescriptorSet writeParams = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        writeParams.dstSet = g_rtPipeline.descSet;
+        writeParams.dstBinding = 2;
+        writeParams.descriptorCount = 1;
+        writeParams.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        writeParams.pBufferInfo = &paramBufInfo;
+        vkUpdateDescriptorSets(g_dev.device, 1, &writeParams, 0, nullptr);
+    }
+
+    // Re-write material descriptor (binding 3)
+    if (g_materialBuffer) {
+        VkDeviceSize matBufSize = g_rtPipeline.descSet ? 0 : 0;
+        // Get material buffer size from existing allocation
+        VkMemoryRequirements memReqs;
+        vkGetBufferMemoryRequirements(g_dev.device, g_materialBuffer, &memReqs);
+
+        VkDescriptorBufferInfo matBufInfo = {};
+        matBufInfo.buffer = g_materialBuffer;
+        matBufInfo.range = memReqs.size;
+
+        VkWriteDescriptorSet writeMat = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        writeMat.dstSet = g_rtPipeline.descSet;
+        writeMat.dstBinding = 3;
+        writeMat.descriptorCount = 1;
+        writeMat.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writeMat.pBufferInfo = &matBufInfo;
+        vkUpdateDescriptorSets(g_dev.device, 1, &writeMat, 0, nullptr);
+    }
+
     env->ReleaseStringUTFChars(shaderPackPath, path);
-    return JNI_FALSE;
+    printf("[Lumen native] nativeLoadShaderPack: loaded successfully from %s\n", path);
+    return JNI_TRUE;
 }
 
 // ---- HDR JNI (stubs - return false until HDR is fully integrated) ----
@@ -581,6 +959,60 @@ JNIEXPORT void JNICALL
 Java_com_luci_lumen_vk_LumenNativeBridge_nativeShutdownHdr(
     JNIEnv* env, jclass cls)
 {
+}
+
+// ---- OIDN Denoiser JNI ----
+
+static OidnDenoiser* g_denoiser = nullptr;
+
+JNIEXPORT jboolean JNICALL
+Java_com_luci_lumen_vk_LumenNativeBridge_nativeInitDenoiser(
+    JNIEnv* env, jclass cls, jint width, jint height, jboolean useGPU)
+{
+    if (g_denoiser) {
+        delete g_denoiser;
+        g_denoiser = nullptr;
+    }
+
+    g_denoiser = new OidnDenoiser();
+    bool ok = g_denoiser->init((int)width, (int)height, useGPU != JNI_FALSE);
+    if (!ok) {
+        printf("[Lumen] OIDN init failed: %s\n", g_denoiser->lastError());
+        delete g_denoiser;
+        g_denoiser = nullptr;
+        return JNI_FALSE;
+    }
+
+    printf("[Lumen] OIDN denoiser initialized\n");
+    return JNI_TRUE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_luci_lumen_vk_LumenNativeBridge_nativeDenoiseImage(
+    JNIEnv* env, jclass cls, jintArray pixels, jint width, jint height)
+{
+    if (!g_denoiser || !g_denoiser->isReady()) return JNI_FALSE;
+
+    jsize len = env->GetArrayLength(pixels);
+    jint* pixelData = env->GetIntArrayElements(pixels, nullptr);
+
+    bool ok = g_denoiser->denoise(reinterpret_cast<uint32_t*>(pixelData),
+                                   (int)width, (int)height);
+
+    env->ReleaseIntArrayElements(pixels, pixelData, 0); // 0 = copy back
+    return ok ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL
+Java_com_luci_lumen_vk_LumenNativeBridge_nativeShutdownDenoiser(
+    JNIEnv* env, jclass cls)
+{
+    if (g_denoiser) {
+        g_denoiser->shutdown();
+        delete g_denoiser;
+        g_denoiser = nullptr;
+        printf("[Lumen] OIDN denoiser shutdown\n");
+    }
 }
 
 } // extern "C"

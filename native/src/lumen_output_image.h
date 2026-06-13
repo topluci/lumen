@@ -10,5 +10,6 @@ struct LumenOutputImage {
     uint32_t frameCount = 0;
 
     bool init(VkDevice device, VkPhysicalDevice physDev, uint32_t w, uint32_t h);
+    bool resize(VkDevice device, VkPhysicalDevice physDev, uint32_t w, uint32_t h);
     void destroy(VkDevice device);
 };

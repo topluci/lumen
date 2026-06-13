@@ -1,32 +1,76 @@
 package com.luci.lumen.config;
 
-import com.luci.lumen.LumenInit;
+import com.luci.lumen.gui.ShaderPackScreen;
+import com.luci.lumen.shaderpack.ShaderPackManager;
 import com.luci.lumen.vk.LumenNativeBridge;
-import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.AbstractSliderButton;
 import net.minecraft.client.gui.components.Button;
-import net.minecraft.client.gui.components.Renderable;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 
-import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.List;
-import java.util.stream.Stream;
 
 public class LumenConfigScreen extends Screen {
     private final Screen parent;
     private String selectedCategory = "Post-Process";
     private boolean showDangerous = false;
-    private List<String> discoveredPacks;
+    private String notificationMessage;
+    private long notificationTimer;
 
     public LumenConfigScreen(Screen parent) {
         super(Component.literal("Lumen Settings \u00a7c[Experimental]"));
         this.parent = parent;
+    }
+
+    @Override
+    protected void init() {
+        super.init();
+        ShaderPackManager.startFileWatcher(this::onShaderpacksChanged);
+    }
+
+    @Override
+    public void removed() {
+        super.removed();
+        ShaderPackManager.stopFileWatcher();
+    }
+
+    private void onShaderpacksChanged() {
+        clearWidgets();
+        rebuildWidgets();
+    }
+
+    @Override
+    public void onFilesDrop(List<Path> paths) {
+        int imported = 0;
+        for (Path path : paths) {
+            if (ShaderPackManager.isValidPack(path)) {
+                Path target = ShaderPackManager.importPack(path);
+                if (target != null) imported++;
+            }
+        }
+        if (imported > 0) {
+            clearWidgets();
+            rebuildWidgets();
+            showNotification("\u00a7aImported " + imported + " shader pack" + (imported > 1 ? "s" : ""));
+        } else {
+            showNotification("\u00a7eNo valid shader packs found (need a \u00a77shaders/\u00a7e folder or .zip)");
+        }
+    }
+
+    private void showNotification(String message) {
+        notificationMessage = message;
+        notificationTimer = System.currentTimeMillis() + 5000;
+    }
+
+    @Override
+    public void tick() {
+        super.tick();
+        if (notificationMessage != null && System.currentTimeMillis() > notificationTimer) {
+            notificationMessage = null;
+        }
     }
 
     @Override
@@ -56,10 +100,6 @@ public class LumenConfigScreen extends Screen {
                 .bounds(right + 100, y0 - 20, 100, 20).build());
 
         var cfg = LumenConfig.get();
-
-        if (discoveredPacks == null) {
-            discoveredPacks = discoverShaderPacks();
-        }
 
         switch (selectedCategory) {
             case "Post-Process" -> {
@@ -112,6 +152,8 @@ public class LumenConfigScreen extends Screen {
             case "Keys" -> {
                 addKeyField(left, y[0], "Toggle Overlay", cfg.toggleOverlayKey);
                 y[0] += 24;
+                addKeyField(left, y[0], "Shader Packs", "O");
+                y[0] += 24;
                 addKeyField(left, y[0], "Screenshot Key", cfg.screenshotKey);
                 y[0] += 24;
                 addKeyField(left, y[0], "Reset Image Key", cfg.resetImageKey);
@@ -120,33 +162,34 @@ public class LumenConfigScreen extends Screen {
             }
             case "Shader" -> {
                 addRenderableWidget(Button.builder(
-                        Component.literal("\u00a76Current: " + cfg.shaderPack),
+                        Component.literal("\u00a76\u25c9 Active: " + cfg.shaderPack),
                         b -> {}).bounds(left, y[0], 230, 20).build());
                 y[0] += 24;
-                for (String pack : discoveredPacks) {
-                    boolean active = pack.equals(cfg.shaderPack);
-                    String prefix = active ? "\u00a7a\u25b6 " : "  ";
-                    addRenderableWidget(Button.builder(
-                            Component.literal(prefix + pack),
-                            b -> { cfg.shaderPack = pack; clearWidgets(); rebuildWidgets(); }
-                    ).bounds(left + 10, y[0], 200, 20).build());
-                    y[0] += 22;
-                }
-                y[0] = addNote(left, y[0], "\u00a77Place packs in .minecraft/shaderpacks/");
+
+                addNote(left, y[0], "\u00a77Drop packs onto the settings screen, or use the browser below");
+                y[0] += 4;
+
                 addRenderableWidget(Button.builder(
-                        Component.literal("Rescan"),
-                        b -> { discoveredPacks = discoverShaderPacks(); clearWidgets(); rebuildWidgets(); }
+                        Component.literal("\u2b07 Browse Files"),
+                        b -> Minecraft.getInstance().setScreenAndShow(new ShaderPackScreen(this))
                 ).bounds(left, y[0], 100, 20).build());
+
                 addRenderableWidget(Button.builder(
-                        Component.literal("\u00a7cReload Shader"),
+                        Component.literal("\uD83D\uDCC2 Open Folder"),
+                        b -> ShaderPackManager.openShaderpacksFolder()
+                ).bounds(left + 105, y[0], 100, 20).build());
+
+                addRenderableWidget(Button.builder(
+                        Component.literal("\u00a7cReload"),
                         b -> {
                             if (!"builtin".equals(cfg.shaderPack)) {
                                 LumenNativeBridge.nativeLoadShaderPack(
-                                        FabricLoader.getInstance().getGameDir()
-                                                .resolve("shaderpacks").resolve(cfg.shaderPack).toString());
+                                        ShaderPackManager.getShaderpacksDir()
+                                                .resolve(cfg.shaderPack).toString());
                             }
+                            ShaderPackManager.refreshNativeShader();
                         }
-                ).bounds(left + 110, y[0], 120, 20).build());
+                ).bounds(left + 210, y[0], 60, 20).build());
                 y[0] += 24;
             }
         }
@@ -240,23 +283,6 @@ public class LumenConfigScreen extends Screen {
         return y + 24;
     }
 
-    private List<String> discoverShaderPacks() {
-        List<String> packs = new ArrayList<>();
-        packs.add("builtin");
-        Path dir = FabricLoader.getInstance().getGameDir().resolve("shaderpacks");
-        if (Files.isDirectory(dir)) {
-            try (Stream<Path> stream = Files.list(dir)) {
-                stream.filter(Files::isDirectory)
-                      .map(p -> p.getFileName().toString())
-                      .sorted()
-                      .forEach(packs::add);
-            } catch (IOException e) {
-                LumenInit.LOGGER.warn("[Lumen] Failed to scan shaderpacks dir", e);
-            }
-        }
-        return packs;
-    }
-
     private void addKeyField(int x, int y, String label, String current) {
         addRenderableWidget(Button.builder(
                 Component.literal(label + ": " + current),
@@ -272,6 +298,14 @@ public class LumenConfigScreen extends Screen {
         var rendererStatus = com.luci.lumen.vk.VulkanDeviceInterceptor.getStatusMessage();
         var statusColor = com.luci.lumen.vk.VulkanDeviceInterceptor.isVulkanAvailable() ? 0x55FF55 : 0xFF5555;
         ctx.text(getFont(), Component.literal("\u00a77Renderer: " + rendererStatus), width / 2 + 50, 60, statusColor, false);
+
+        if (notificationMessage != null) {
+            int notifW = getFont().width(notificationMessage) + 20;
+            int notifX = (width - notifW) / 2;
+            ctx.fill(notifX - 2, 4, notifX + notifW + 2, 24, 0xCC111111);
+            ctx.fill(notifX - 1, 5, notifX + notifW + 1, 23, 0xCC333333);
+            ctx.centeredText(getFont(), Component.literal(notificationMessage), width / 2, 11, 0xFFFFFF);
+        }
 
         super.extractRenderState(ctx, mx, my, delta);
     }

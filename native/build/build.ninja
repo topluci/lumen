@@ -119,6 +119,16 @@ build CMakeFiles/lumen_native_rt.dir/src/lumen_postprocess.cpp.obj: CXX_COMPILER
   OBJECT_FILE_DIR = CMakeFiles\lumen_native_rt.dir\src
   TARGET_SUPPORT_DIR = CMakeFiles\lumen_native_rt.dir
 
+build CMakeFiles/lumen_native_rt.dir/src/oidn_denoiser.cpp.obj: CXX_COMPILER__lumen_native_rt_unscanned_Release C$:/Users/Luca/Documents/GitHub/lumen/native/src/oidn_denoiser.cpp || cmake_object_order_depends_target_lumen_native_rt
+  CONFIG = Release
+  DEFINES = -Dlumen_native_rt_EXPORTS
+  DEP_FILE = CMakeFiles\lumen_native_rt.dir\src\oidn_denoiser.cpp.obj.d
+  FLAGS = -O3 -DNDEBUG -std=gnu++17
+  INCLUDES = -I"C:/Program Files/Eclipse Adoptium/jdk-25.0.2.10-hotspot/include" -I"C:/Program Files/Eclipse Adoptium/jdk-25.0.2.10-hotspot/include/win32" -IC:/Users/Luca/Documents/GitHub/lumen/native/src -isystem C:/VulkanSDK/1.4.350.0/Include
+  OBJECT_DIR = CMakeFiles\lumen_native_rt.dir
+  OBJECT_FILE_DIR = CMakeFiles\lumen_native_rt.dir\src
+  TARGET_SUPPORT_DIR = CMakeFiles\lumen_native_rt.dir
+
 
 # =============================================================================
 # Link build statements for SHARED_LIBRARY target lumen_native_rt
@@ -127,7 +137,7 @@ build CMakeFiles/lumen_native_rt.dir/src/lumen_postprocess.cpp.obj: CXX_COMPILER
 #############################################
 # Link the shared library lib\liblumen_native_rt.dll
 
-build lib/liblumen_native_rt.dll liblumen_native_rt.dll.a: CXX_SHARED_LIBRARY_LINKER__lumen_native_rt_Release CMakeFiles/lumen_native_rt.dir/src/lumen_jni_bridge.cpp.obj CMakeFiles/lumen_native_rt.dir/src/lumen_device.cpp.obj CMakeFiles/lumen_native_rt.dir/src/lumen_as.cpp.obj CMakeFiles/lumen_native_rt.dir/src/lumen_rt_pipeline.cpp.obj CMakeFiles/lumen_native_rt.dir/src/lumen_output_image.cpp.obj CMakeFiles/lumen_native_rt.dir/src/lumen_scene.cpp.obj CMakeFiles/lumen_native_rt.dir/src/lumen_postprocess.cpp.obj | C$:/VulkanSDK/1.4.350.0/Lib/vulkan-1.lib
+build lib/liblumen_native_rt.dll liblumen_native_rt.dll.a: CXX_SHARED_LIBRARY_LINKER__lumen_native_rt_Release CMakeFiles/lumen_native_rt.dir/src/lumen_jni_bridge.cpp.obj CMakeFiles/lumen_native_rt.dir/src/lumen_device.cpp.obj CMakeFiles/lumen_native_rt.dir/src/lumen_as.cpp.obj CMakeFiles/lumen_native_rt.dir/src/lumen_rt_pipeline.cpp.obj CMakeFiles/lumen_native_rt.dir/src/lumen_output_image.cpp.obj CMakeFiles/lumen_native_rt.dir/src/lumen_scene.cpp.obj CMakeFiles/lumen_native_rt.dir/src/lumen_postprocess.cpp.obj CMakeFiles/lumen_native_rt.dir/src/oidn_denoiser.cpp.obj | C$:/VulkanSDK/1.4.350.0/Lib/vulkan-1.lib
   CONFIG = Release
   LANGUAGE_COMPILE_FLAGS = -O3 -DNDEBUG
   LINK_FLAGS = -shared

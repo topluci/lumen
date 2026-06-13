@@ -68,10 +68,18 @@ public final class LumenNativeBridge {
         }
     }
 
+    // --- Diagnostics ---
+    public static native boolean nativeVerifyHandles(long vkInstanceHandle, long vkDeviceHandle);
+    public static native int nativeGetInitStep();
+
     // --- RT Pipeline ---
     public static native boolean init(long vkInstanceHandle, long vkDeviceHandle);
     public static native boolean renderFrame();
+    public static native int[] nativeReadbackPixels();
     public static native boolean shutdown();
+
+    // --- Resize ---
+    public static native boolean nativeResize(int width, int height);
 
     // --- Post-Process ---
     public static native boolean nativeInitPostProcess(long vkDevicePtr);
@@ -102,6 +110,11 @@ public final class LumenNativeBridge {
                                                 int width, int height,
                                                 float paperWhiteNits, float maxLuminance);
     public static native void nativeShutdownHdr();
+
+    // --- OIDN Denoiser ---
+    public static native boolean nativeInitDenoiser(int width, int height, boolean useGPU);
+    public static native boolean nativeDenoiseImage(int[] pixels, int width, int height);
+    public static native void nativeShutdownDenoiser();
 
     public static void markInitialized() {
         nativeInitialized = true;

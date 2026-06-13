@@ -115,6 +115,12 @@ bool LumenOutputImage::init(VkDevice device, VkPhysicalDevice physDev,
     return true;
 }
 
+bool LumenOutputImage::resize(VkDevice device, VkPhysicalDevice physDev, uint32_t w, uint32_t h) {
+    if (w == width && h == height) return true;
+    destroy(device);
+    return init(device, physDev, w, h);
+}
+
 void LumenOutputImage::destroy(VkDevice device) {
     if (view) vkDestroyImageView(device, view, nullptr);
     if (image) vkDestroyImage(device, image, nullptr);

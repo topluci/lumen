@@ -1,0 +1,5 @@
+Manifest-Version: 1.0
+Implementation-Title: lumen
+Implementation-Version: 0.1.0
+Lumen-Versions: versions,26.1,26.2
+

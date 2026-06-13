@@ -53,6 +53,7 @@ public class LumenConfig {
     public float upscalingQuality = 0.5f; // 0=performance..1=quality
 
     // Performance
+    public int performancePreset = -1;   // -1=custom, 0=Battery, 1=Balanced, 2=Quality, 3=Extreme
     public int targetFps = 0;            // 0=auto (monitor refresh)
     public int frameSkip = 0;            // 0=off, 1=skip every other frame, etc.
     public float renderScale = 1.0f;     // 0.25..1.0 internal resolution scale
@@ -72,6 +73,10 @@ public class LumenConfig {
     // UI
     public boolean overlayShowAdvanced = false;
     public float overlayOpacity = 0.85f;
+
+    // Denoiser (OIDN)
+    public boolean denoiserEnabled = false;
+    public boolean denoiserUseGPU = true;
 
     public static LumenConfig get() {
         if (INSTANCE == null) {

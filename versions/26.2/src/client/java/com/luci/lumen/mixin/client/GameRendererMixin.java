@@ -1,11 +1,12 @@
 package com.luci.lumen.mixin.client;
 
+import com.luci.lumen.api.renderer.RendererManager;
 import com.luci.lumen.compat.CompatibilityGuard;
 import com.luci.lumen.config.LumenConfig;
 import com.luci.lumen.gui.ImageAdjustmentOverlay;
 import com.luci.lumen.vk.ChunkGeometryCapture;
 import com.luci.lumen.vk.LumenNativeBridge;
-import com.luci.lumen.vk.VulkanDeviceInterceptor;
+import com.luci.lumen.vk.RtOverlayRenderer;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
@@ -23,7 +24,6 @@ public abstract class GameRendererMixin {
     abstract GameRenderState lumen$getGameRenderState();
 
     private static boolean lumenCompatChecked = false;
-    private static boolean lumenVulkanRetried = false;
     private static boolean lumenGeometryEnabled = false;
 
     @Inject(method = "extract", at = @At("TAIL"))
@@ -33,24 +33,16 @@ public abstract class GameRendererMixin {
             lumenCompatChecked = true;
         }
 
-        if (!lumenVulkanRetried) {
-            lumenVulkanRetried = true;
-            if (!VulkanDeviceInterceptor.isVulkanAvailable()) {
-                VulkanDeviceInterceptor.retryVulkanMod();
-            }
-        }
-
         if (!LumenConfig.get().enabled) return;
-        if (VulkanDeviceInterceptor.shouldSkipRender()) return;
+        if (!RendererManager.get().getActive().isAvailable()) return;
+        if (LumenConfig.get().skipWhenPaused && Minecraft.getInstance().isPaused()) return;
 
         if (LumenNativeBridge.isAvailable()) {
-            // Enable geometry capture on first frame
             if (!lumenGeometryEnabled) {
                 ChunkGeometryCapture.setEnabled(true);
                 lumenGeometryEnabled = true;
             }
 
-            // Update camera position and direction
             var renderState = lumen$getGameRenderState();
             if (renderState.levelRenderState != null) {
                 var cam = renderState.levelRenderState.cameraRenderState;
@@ -66,10 +58,10 @@ public abstract class GameRendererMixin {
                 }
             }
 
-            // Upload any newly captured geometry
             ChunkGeometryCapture.uploadScene();
 
             LumenNativeBridge.renderFrame();
+            RtOverlayRenderer.captureAndUpdate();
         }
 
         if (ImageAdjustmentOverlay.isVisible() && !CompatibilityGuard.shouldDisablePostProcess()) {

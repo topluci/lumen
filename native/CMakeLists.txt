@@ -15,6 +15,7 @@ add_library(lumen_native_rt SHARED
     src/lumen_output_image.cpp
     src/lumen_scene.cpp
     src/lumen_postprocess.cpp
+    src/oidn_denoiser.cpp
 )
 
 target_include_directories(lumen_native_rt PRIVATE

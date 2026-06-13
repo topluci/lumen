@@ -275,6 +275,180 @@ bool LumenRTPipeline::init(VkDevice device, VkPhysicalDevice physDev,
     return true;
 }
 
+bool LumenRTPipeline::reloadShaders(VkDevice device, VkPhysicalDevice physDev,
+                                    LumenOutputImage* outputImage,
+                                    const uint32_t* raygenCode, uint32_t raygenSize,
+                                    const uint32_t* hitCode, uint32_t hitSize,
+                                    const uint32_t* missCode, uint32_t missSize) {
+    auto vkCreateRTPipelines = (PFN_vkCreateRayTracingPipelinesKHR)
+        vkGetDeviceProcAddr(device, "vkCreateRayTracingPipelinesKHR");
+    auto vkGetRTShaderGroupHandles = (PFN_vkGetRayTracingShaderGroupHandlesKHR)
+        vkGetDeviceProcAddr(device, "vkGetRayTracingShaderGroupHandlesKHR");
+    auto vkCmdTraceRays = (PFN_vkCmdTraceRaysKHR)
+        vkGetDeviceProcAddr(device, "vkCmdTraceRaysKHR");
+
+    if (!vkCreateRTPipelines || !vkGetRTShaderGroupHandles || !vkCmdTraceRays) {
+        fprintf(stderr, "[Lumen RT] reload: RT function pointers not available\n");
+        return false;
+    }
+
+    // Destroy old pipeline + SBT (keep descriptor infrastructure)
+    if (pipeline) { vkDestroyPipeline(device, pipeline, nullptr); pipeline = VK_NULL_HANDLE; }
+    if (sbtBuffer) { vkDestroyBuffer(device, sbtBuffer, nullptr); sbtBuffer = VK_NULL_HANDLE; }
+    if (sbtMemory) { vkFreeMemory(device, sbtMemory, nullptr); sbtMemory = VK_NULL_HANDLE; }
+
+    // Create new shader modules
+    VkShaderModule raygenMod = createShaderModule(device, raygenCode, raygenSize);
+    VkShaderModule hitMod = createShaderModule(device, hitCode, hitSize);
+    VkShaderModule missMod = createShaderModule(device, missCode, missSize);
+    if (!raygenMod || !hitMod || !missMod) return false;
+
+    VkPipelineShaderStageCreateInfo stages[3] = {};
+    stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+    stages[0].module = raygenMod;
+    stages[0].pName = "main";
+
+    stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+    stages[1].module = hitMod;
+    stages[1].pName = "main";
+
+    stages[2].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[2].stage = VK_SHADER_STAGE_MISS_BIT_KHR;
+    stages[2].module = missMod;
+    stages[2].pName = "main";
+
+    VkRayTracingShaderGroupCreateInfoKHR groups[3] = {};
+    groups[0].sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
+    groups[0].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+    groups[0].generalShader = 0;
+    groups[0].closestHitShader = VK_SHADER_UNUSED_KHR;
+    groups[0].anyHitShader = VK_SHADER_UNUSED_KHR;
+    groups[0].intersectionShader = VK_SHADER_UNUSED_KHR;
+
+    groups[1].sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
+    groups[1].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+    groups[1].generalShader = 2;
+    groups[1].closestHitShader = VK_SHADER_UNUSED_KHR;
+    groups[1].anyHitShader = VK_SHADER_UNUSED_KHR;
+    groups[1].intersectionShader = VK_SHADER_UNUSED_KHR;
+
+    groups[2].sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
+    groups[2].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
+    groups[2].generalShader = VK_SHADER_UNUSED_KHR;
+    groups[2].closestHitShader = 1;
+    groups[2].anyHitShader = VK_SHADER_UNUSED_KHR;
+    groups[2].intersectionShader = VK_SHADER_UNUSED_KHR;
+
+    VkRayTracingPipelineCreateInfoKHR rtInfo = {VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR};
+    rtInfo.stageCount = 3;
+    rtInfo.pStages = stages;
+    rtInfo.groupCount = 3;
+    rtInfo.pGroups = groups;
+    rtInfo.maxPipelineRayRecursionDepth = 4;
+    rtInfo.layout = pipelineLayout;
+
+    VkDeferredOperationKHR deferredOp = VK_NULL_HANDLE;
+    VkPipelineCache pipelineCache = VK_NULL_HANDLE;
+    if (vkCreateRTPipelines(device, deferredOp, pipelineCache, 1, &rtInfo, nullptr, &pipeline) != VK_SUCCESS) {
+        fprintf(stderr, "[Lumen RT] reload: failed to create pipeline\n");
+        vkDestroyShaderModule(device, raygenMod, nullptr);
+        vkDestroyShaderModule(device, hitMod, nullptr);
+        vkDestroyShaderModule(device, missMod, nullptr);
+        return false;
+    }
+
+    vkDestroyShaderModule(device, raygenMod, nullptr);
+    vkDestroyShaderModule(device, hitMod, nullptr);
+    vkDestroyShaderModule(device, missMod, nullptr);
+
+    // Rebuild SBT
+    VkPhysicalDeviceRayTracingPipelinePropertiesKHR rtProps = {
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR};
+    VkPhysicalDeviceProperties2 props2 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+    props2.pNext = &rtProps;
+    vkGetPhysicalDeviceProperties2(physDev, &props2);
+
+    sbtHandleSize = rtProps.shaderGroupHandleSize;
+    uint32_t sbtBaseAlignment = rtProps.shaderGroupBaseAlignment;
+    uint32_t groupCount = 3;
+
+    uint32_t handleArraySize = groupCount * sbtHandleSize;
+    uint8_t* handles = (uint8_t*)malloc(handleArraySize);
+    vkGetRTShaderGroupHandles(device, pipeline, 0, groupCount, handleArraySize, handles);
+
+    uint32_t groupSize = ((sbtHandleSize + sbtBaseAlignment - 1) / sbtBaseAlignment) * sbtBaseAlignment;
+
+    raygenSBT.stride = sbtBaseAlignment;
+    raygenSBT.size = sbtBaseAlignment;
+    missSBT.stride = groupSize;
+    missSBT.size = groupSize;
+    hitSBT.stride = groupSize;
+    hitSBT.size = groupSize;
+
+    uint32_t sbtSize = raygenSBT.size + missSBT.size + hitSBT.size;
+
+    VkBufferCreateInfo bufInfo = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bufInfo.size = sbtSize;
+    bufInfo.usage = VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR |
+                    VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                    VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bufInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    vkCreateBuffer(device, &bufInfo, nullptr, &sbtBuffer);
+
+    VkMemoryRequirements memReqs;
+    vkGetBufferMemoryRequirements(device, sbtBuffer, &memReqs);
+
+    VkMemoryAllocateInfo allocInfo = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    allocInfo.allocationSize = memReqs.size;
+    allocInfo.memoryTypeIndex = findMemoryType(physDev, memReqs.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    vkAllocateMemory(device, &allocInfo, nullptr, &sbtMemory);
+    vkBindBufferMemory(device, sbtBuffer, sbtMemory, 0);
+
+    auto vkGetBufAddr = (PFN_vkGetBufferDeviceAddressKHR)
+        vkGetDeviceProcAddr(device, "vkGetBufferDeviceAddressKHR");
+    if (!vkGetBufAddr) {
+        fprintf(stderr, "[Lumen RT] reload: vkGetBufferDeviceAddress not available\n");
+        free(handles);
+        return false;
+    }
+
+    VkBufferDeviceAddressInfo addrInfo = {VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
+    addrInfo.buffer = sbtBuffer;
+    VkDeviceAddress sbtAddress = vkGetBufAddr(device, &addrInfo);
+
+    uint8_t* mapped;
+    vkMapMemory(device, sbtMemory, 0, sbtSize, 0, (void**)&mapped);
+    memcpy(mapped, handles, sbtHandleSize);
+    memcpy(mapped + raygenSBT.size, handles + 1 * sbtHandleSize, sbtHandleSize);
+    memcpy(mapped + raygenSBT.size + groupSize, handles + 2 * sbtHandleSize, sbtHandleSize);
+    vkUnmapMemory(device, sbtMemory);
+
+    raygenSBT.deviceAddress = sbtAddress;
+    missSBT.deviceAddress = sbtAddress + raygenSBT.size;
+    hitSBT.deviceAddress = sbtAddress + raygenSBT.size + groupSize;
+
+    free(handles);
+
+    // Re-write storage image descriptor (binding 0)
+    VkDescriptorImageInfo imgInfo = {};
+    imgInfo.imageView = outputImage->view;
+    imgInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+    VkWriteDescriptorSet writeImg = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    writeImg.dstSet = descSet;
+    writeImg.dstBinding = 0;
+    writeImg.descriptorCount = 1;
+    writeImg.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    writeImg.pImageInfo = &imgInfo;
+    vkUpdateDescriptorSets(device, 1, &writeImg, 0, nullptr);
+
+    fprintf(stderr, "[Lumen RT] reload: shaders reloaded successfully\n");
+    return true;
+}
+
 void LumenRTPipeline::destroy(VkDevice device) {
     if (pipeline) vkDestroyPipeline(device, pipeline, nullptr);
     if (pipelineLayout) vkDestroyPipelineLayout(device, pipelineLayout, nullptr);

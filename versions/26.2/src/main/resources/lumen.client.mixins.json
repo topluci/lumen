@@ -7,8 +7,12 @@
     "client": [
         "GameRendererMixin",
         "VulkanDeviceMixin",
+        "InGameHudMixin",
         "KeyboardInputMixin",
-        "SectionCompilerMixin"
+        "SectionCompilerMixin",
+        "OptionsSubScreenAccessor",
+        "VideoSettingsScreenMixin",
+        "WindowResizeMixin"
     ],
     "injectors": {
         "defaultRequire": 1

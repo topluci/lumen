@@ -25,4 +25,10 @@ struct LumenRTPipeline {
     void destroy(VkDevice device);
     bool init(VkDevice device, VkPhysicalDevice physDev, const LumenAccelStruct* tlas,
               LumenOutputImage* outputImage);
+
+    bool reloadShaders(VkDevice device, VkPhysicalDevice physDev,
+                       LumenOutputImage* outputImage,
+                       const uint32_t* raygenCode, uint32_t raygenSize,
+                       const uint32_t* hitCode, uint32_t hitSize,
+                       const uint32_t* missCode, uint32_t missSize);
 };

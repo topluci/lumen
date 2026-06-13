@@ -1,9 +1,9 @@
 package com.luci.lumen;
 
+import com.luci.lumen.api.renderer.RendererManager;
 import com.luci.lumen.config.LumenConfig;
 import com.luci.lumen.config.LumenVulkanModIntegration;
 import com.luci.lumen.gui.ImageAdjustmentOverlay;
-import com.luci.lumen.vk.VulkanDeviceInterceptor;
 import com.mojang.blaze3d.platform.InputConstants;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.api.EnvType;
@@ -17,6 +17,7 @@ import org.lwjgl.glfw.GLFW;
 @Environment(EnvType.CLIENT)
 public class LumenClientInit implements ClientModInitializer {
     private static KeyMapping toggleOverlayKey;
+    private static KeyMapping shaderPacksKey;
 
     @Override
     public void onInitializeClient() {
@@ -24,8 +25,8 @@ public class LumenClientInit implements ClientModInitializer {
 
         LumenConfig.get();
 
-        VulkanDeviceInterceptor.detectRendererFallback();
-        LumenInit.LOGGER.info("[Lumen] Renderer: {}", VulkanDeviceInterceptor.getStatusMessage());
+        RendererManager.get().detect();
+        LumenInit.LOGGER.info("[Lumen] Renderer: {}", RendererManager.get().getStatusMessage());
 
         LumenVulkanModIntegration.register();
 
@@ -36,9 +37,20 @@ public class LumenClientInit implements ClientModInitializer {
                 KeyMapping.Category.MISC
         ));
 
+        shaderPacksKey = KeyMappingHelper.registerKeyMapping(new KeyMapping(
+                "key.lumen.shaderPacks",
+                InputConstants.Type.KEYSYM,
+                GLFW.GLFW_KEY_O,
+                KeyMapping.Category.MISC
+        ));
+
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             while (toggleOverlayKey.consumeClick()) {
                 ImageAdjustmentOverlay.toggle();
+            }
+            while (shaderPacksKey.consumeClick()) {
+                Minecraft.getInstance().setScreenAndShow(
+                        new com.luci.lumen.gui.screen.HubScreen(null));
             }
         });
 

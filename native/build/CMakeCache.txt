@@ -251,10 +251,10 @@ JAVA_INCLUDE_PATH2:PATH=C:/Program Files/Eclipse Adoptium/jdk-25.0.2.10-hotspot/
 JAVA_JVM_LIBRARY:FILEPATH=C:/Program Files/Eclipse Adoptium/jdk-25.0.2.10-hotspot/lib/jvm.lib
 
 //Path to a program.
-Vulkan_GLSLANG_VALIDATOR_EXECUTABLE:FILEPATH=Vulkan_GLSLANG_VALIDATOR_EXECUTABLE-NOTFOUND
+Vulkan_GLSLANG_VALIDATOR_EXECUTABLE:FILEPATH=C:/VulkanSDK/1.4.350.0/Bin/glslangValidator.exe
 
 //Path to a program.
-Vulkan_GLSLC_EXECUTABLE:FILEPATH=Vulkan_GLSLC_EXECUTABLE-NOTFOUND
+Vulkan_GLSLC_EXECUTABLE:FILEPATH=C:/VulkanSDK/1.4.350.0/Bin/glslc.exe
 
 //Path to a file.
 Vulkan_INCLUDE_DIR:PATH=C:/VulkanSDK/1.4.350.0/Include
@@ -425,7 +425,7 @@ CMAKE_VERBOSE_MAKEFILE-ADVANCED:INTERNAL=1
 //Details about finding JNI
 FIND_PACKAGE_MESSAGE_DETAILS_JNI:INTERNAL=[C:/Program Files/Eclipse Adoptium/jdk-25.0.2.10-hotspot/include][C:/Program Files/Eclipse Adoptium/jdk-25.0.2.10-hotspot/include/win32][found components: AWT JVM ][v()]
 //Details about finding Vulkan
-FIND_PACKAGE_MESSAGE_DETAILS_Vulkan:INTERNAL=[C:/VulkanSDK/1.4.350.0/Lib/vulkan-1.lib][C:/VulkanSDK/1.4.350.0/Include][ missing components: glslc glslangValidator][v1.4.350()]
+FIND_PACKAGE_MESSAGE_DETAILS_Vulkan:INTERNAL=[C:/VulkanSDK/1.4.350.0/Lib/vulkan-1.lib][C:/VulkanSDK/1.4.350.0/Include][found components: glslc glslangValidator ][v1.4.350()]
 //ADVANCED property for variable: JAVA_AWT_INCLUDE_PATH
 JAVA_AWT_INCLUDE_PATH-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: JAVA_AWT_LIBRARY
