@@ -71,6 +71,7 @@ public class LumenConfig {
     public String resetImageKey = "F10";
 
     // UI
+    public boolean advancedSettingsUi = false;
     public boolean overlayShowAdvanced = false;
     public float overlayOpacity = 0.85f;
 
